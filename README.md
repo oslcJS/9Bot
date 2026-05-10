@@ -25,7 +25,7 @@ Autonomous Minecraft AI framework using neural evolution, reinforcement learning
 
 9Bot is an AI-driven Minecraft bot framework designed to train agents that can fight, build, navigate, and adapt inside a live Java Edition server.
 
-It combines:
+combines:
 - evolutionary neural networks  
 - reinforcement-based behavior systems  
 - CLI-driven training pipelines  
@@ -38,11 +38,8 @@ It combines:
 ![](https://raw.githubusercontent.com/oslcJS/.github/main/assets/2.gif)
 
 - neural movement learning system  
-- combat decision engine (PvP logic) (rough)
-- crystal PvP simulation  
-- building pattern AI  
-- genetic evolution training  
-- human-like aim simulation (somewhat) 
+- combat decision engine (PvP logic) (rough) 
+- genetic evolution training   
 - inventory optimization system  
 - multi-agent server deployment  
 
