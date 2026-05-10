@@ -38,11 +38,11 @@ It combines:
 ![](https://raw.githubusercontent.com/oslcJS/.github/main/assets/2.gif)
 
 - neural movement learning system  
-- combat decision engine (PvP logic)  
+- combat decision engine (PvP logic) (rough)
 - crystal PvP simulation  
 - building pattern AI  
 - genetic evolution training  
-- human-like aim simulation  
+- human-like aim simulation (somewhat) 
 - inventory optimization system  
 - multi-agent server deployment  
 
@@ -91,8 +91,8 @@ Core systems:
 - neural movement system  
 - evolution trainer  
 - building AI system  
-- combat decision engine  
-- inventory optimizer  
+- combat decision engine (rough) 
+- inventory optimizer (rough)
 
 ---
 
