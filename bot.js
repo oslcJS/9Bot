@@ -10,6 +10,7 @@ let cliPort = null;
 let botIndex = 0;
 let trainingPhase = 'combat';
 let isTrainer = false;
+let moduleBridge = null;
 
 for (const arg of args) {
   if (arg.startsWith('--port=')) cliPort = parseInt(arg.split('=')[1])
@@ -130,6 +131,11 @@ function executeCommand(cmd) {
         log('  /health - Show bot health/hunger', 'white');
         log('  /goto <x> <y> <z> - Move to coordinates', 'white');
         log('  /stop - Stop current movement', 'white');
+        log('  /modules                    - List Python behavior modules', 'white');
+        log('  /modules on <name>         - Enable a module', 'white');
+        log('  /modules off <name>        - Disable a module', 'white');
+        log('  /modules reload <name>     - Reload a module', 'white');
+        log('  /modules retrain <name>    - Retrain a module', 'white');
         log('  /help - Show this help', 'white');
         log('  /quit or /exit - Exit the bot', 'white');
         break;
@@ -224,9 +230,46 @@ function executeCommand(cmd) {
         }
         break;
 
+      case 'modules':
+        if (!moduleBridge) {
+          log('Module bridge not initialized', 'red')
+          break
+        }
+        if (parts.length < 2 || parts[1] === 'list') {
+          const mods = moduleBridge.listModules()
+          log(`Python Modules (${mods.length}):`, 'cyan')
+          if (mods.length === 0) {
+            log('  No .py files in modules/ (excluding NB.py)', 'gray')
+          }
+          mods.forEach(m => {
+            const status = m.active ? `${colors.green}ACTIVE${colors.reset}` : `${colors.red}OFF${colors.reset}`
+            const running = m.running ? `${colors.gray}[running]${colors.reset}` : ''
+            log(`  ${m.name} ${status} ${running}`, 'white')
+          })
+        } else if (parts[1] === 'on' && parts[2]) {
+          moduleBridge.setModuleActive(parts[2], true)
+          moduleBridge.reloadModule(parts[2])
+          log(`Module ${parts[2]} enabled`, 'green')
+        } else if (parts[1] === 'off' && parts[2]) {
+          moduleBridge.setModuleActive(parts[2], false)
+          moduleBridge.unloadModule(parts[2])
+          log(`Module ${parts[2]} disabled`, 'yellow')
+        } else if (parts[1] === 'reload' && parts[2]) {
+          moduleBridge.reloadModule(parts[2])
+          log(`Module ${parts[2]} reloaded`, 'cyan')
+        } else if (parts[1] === 'retrain' && parts[2]) {
+          log(`Retraining module ${parts[2]}...`, 'magenta')
+          moduleBridge.sendEvent('retrain', { module: parts[2], generations: 20 })
+          log(`Retrain signal sent to ${parts[2]}`, 'green')
+        } else {
+          log('Usage: /modules [list|on|off|reload|retrain] [name]', 'yellow')
+        }
+        break
+
       case 'quit':
       case 'exit':
         log('Shutting down...', 'yellow');
+        if (moduleBridge) moduleBridge.unloadAll();
         setTimeout(() => process.exit(0), 500);
         break;
 
@@ -250,6 +293,7 @@ let startTime = null;
 const MAX_TRAIN_TIME = 90000;
 let combatInterval = null;
 let lastTarget = null;
+let lastAttacker = null;
 
 function saveStats() {
   try {
@@ -342,6 +386,9 @@ async function init() {
     log(`Connection ended`, 'yellow');
   });
 
+  moduleBridge = new (require('./module_bridge.js').ModuleBridge)(bot);
+  let moduleStateInterval = null;
+
   bot.once('spawn', () => {
     if (!bot.entity) {
       log('Entity not ready after spawn!', 'red');
@@ -350,6 +397,34 @@ async function init() {
     const grid = getGridPos(botIndex);
     log(`Spawned at grid (${grid.x}, ${grid.z}) - Phase: ${trainingPhase}`, 'green');
     logStatus(`${name} | Spawned at (${grid.x}, ${grid.z}) | Phase: ${trainingPhase}`);
+
+    const activeModules = moduleBridge.listModules().filter(m => m.active)
+    activeModules.forEach(m => {
+      log(`Loading module: ${m.name}`, 'cyan')
+      moduleBridge.loadModule(m.name)
+    })
+    log(`Loaded ${activeModules.length} Python module(s)`, activeModules.length > 0 ? 'green' : 'gray')
+
+    moduleStateInterval = setInterval(() => {
+      if (!bot.entity || bot.dead) return
+      const pos = bot.entity.position
+      moduleBridge.broadcastState({
+        health: bot.health,
+        food: bot.food,
+        position: { x: pos.x, y: pos.y, z: pos.z },
+        yaw: bot.entity.yaw,
+        pitch: bot.entity.pitch,
+        velocity: { x: bot.entity.velocity.x, y: bot.entity.velocity.y, z: bot.entity.velocity.z },
+        on_ground: bot.entity.onGround,
+        is_in_water: bot.entity.isInWater,
+        is_sprinting: bot.entity.isSprinting,
+        held_item: bot.heldItem ? bot.heldItem.name : null,
+        target: lastTarget ? { x: lastTarget.position.x, y: lastTarget.position.y, z: lastTarget.position.z } : null,
+        dead: bot.dead,
+        score: stats.score,
+        ping: bot.player?.ping || 0
+      })
+    }, 200)
 
     const mcData = require('minecraft-data')(bot.version);
     const movements = new pathfinder.Movements(bot, mcData);
@@ -412,6 +487,55 @@ async function init() {
     });
 
     setupChatCommands(bot, name);
+
+    bot.on('entityDamagedEntity', (damaged, damager) => {
+      if (damaged === bot.entity) {
+        lastAttacker = damager
+      }
+    })
+
+    bot.on('entityHurt', (entity) => {
+      if (entity === bot.entity && moduleBridge) {
+        const attacker = lastAttacker || bot.nearestEntity(e =>
+          e.type === 'player' && e.position.distanceTo(bot.entity.position) < 6
+        )
+        moduleBridge.sendEvent('hit', {
+          health: bot.health,
+          attacker_name: attacker ? attacker.username || attacker.name || 'unknown' : 'unknown',
+          attacker_position: attacker ? { x: attacker.position.x, y: attacker.position.y, z: attacker.position.z } : null,
+          timestamp: Date.now()
+        })
+      }
+    })
+
+    bot.on('death', () => {
+      if (moduleBridge) {
+        moduleBridge.sendEvent('death', {
+          health: 0,
+          killer: lastAttacker ? lastAttacker.username || 'unknown' : 'unknown',
+          timestamp: Date.now()
+        })
+      }
+    })
+
+    bot.on('entityDamagedEntity', (damaged, damager) => {
+      if (damager === bot.entity && damaged !== bot.entity && moduleBridge) {
+        moduleBridge.sendEvent('attack', {
+          target_name: damaged.username || damaged.name || 'entity',
+          target_position: damaged.position ? { x: damaged.position.x, y: damaged.position.y, z: damaged.position.z } : null,
+          timestamp: Date.now()
+        })
+      }
+    })
+
+    bot.on('playerCollect', (collector, collected) => {
+      if (collector === bot.entity && moduleBridge) {
+        moduleBridge.sendEvent('collect', {
+          item_name: collected.name || 'unknown',
+          timestamp: Date.now()
+        })
+      }
+    })
 
     if (isTrainer) runTrainer(bot);
     else if (botIndex === MANAGER_INDEX) runManager(bot);

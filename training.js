@@ -1,9 +1,10 @@
 const readline = require('readline')
 const fs = require('fs')
 const path = require('path')
-const { MovementTrainer, NeuralNetwork, MovementSimulation, MODELS_DIR, generateModelName } = require('./movement_ml.js')
+const { MovementTrainer, UltraTrainer, NeuralNetwork, MovementSimulation, MODELS_DIR, generateModelName } = require('./movement_ml.js')
 
 const config = require('./config.json')
+const { ModuleBridge } = require('./module_bridge.js')
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -45,6 +46,13 @@ function printHelp() {
   log('    --gens=N               Generations (default: 50)', 'gray')
   log('    --pop=N                Population size (default: 50)', 'gray')
   log('    --rate=N               Mutation rate (default: 0.3)', 'gray')
+  log('  train ultra [opts]       ULTRA-DETAILED training (bigger network)', 'white')
+  log('    --gens=N               Generations (default: 200)', 'gray')
+  log('    --pop=N                Population size (default: 200)', 'gray')
+  log('    --rate=N               Mutation rate (default: 0.4)', 'gray')
+  log('  modules                  List Python behavior modules', 'white')
+  log('  modules toggle <name>    Enable/disable a module', 'white')
+  log('  modules retrain <name>   Retrain a module', 'white')
   log('  test <model.json>        Test a trained model visually', 'white')
   log('  list                     List saved models', 'white')
   log('  evolve                   Run genetic algorithm', 'white')
@@ -119,6 +127,93 @@ async function trainMovement(options) {
   log(`Steps: ${sim.stepCount} | Distance to target: ${finalDist.toFixed(2)} | Reached: ${finalDist <= 2 ? 'YES' : 'NO'} | Score: ${sim.totalReward.toFixed(1)}`, finalDist <= 2 ? 'green' : 'red')
 
   return result
+}
+
+async function trainUltra(options) {
+  const gens = options.gens || 200
+  const pop = options.pop || 200
+  const rate = options.rate || 0.4
+
+  log('━━━ ULTRA MOVEMENT TRAINING ━━━', 'magenta')
+  log(`Population: ${pop} | Generations: ${gens} | Mutation Rate: ${rate}`, 'cyan')
+  log('Architecture: 22 inputs → 48 → 36 → 24 → 3 outputs', 'gray')
+  log('Sensors: 13-directional obstacle detection + momentum + exploration + angle', 'gray')
+  log('Selection: Tournament + Elite | Adaptive mutation rate', 'gray')
+  log('')
+
+  const trainer = new UltraTrainer()
+  const startTime = Date.now()
+
+  const result = trainer.train({
+    populationSize: pop,
+    generations: gens,
+    mutationRate: rate
+  })
+
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+
+  log('', 'reset')
+  log('━━━ Ultra Training Complete ━━━', 'green')
+  log(`Time: ${elapsed}s | Best Score: ${result.bestScore.toFixed(1)}`, 'cyan')
+
+  const modelName = 'ultra_' + generateModelName()
+  const modelPath = path.join(MODELS_DIR, modelName + '.json')
+  result.bestBrain.save(modelPath)
+  log(`Model saved: ${COLORS.green}${modelName}.json${COLORS.reset}`, 'gray')
+
+  log('', 'reset')
+  log('Testing best model visualization:', 'yellow')
+  const { UltraSimulation } = require('./movement_ml.js')
+  const sim = new UltraSimulation()
+  let done = false
+  while (!done) {
+    const state = sim.getState()
+    const output = result.bestBrain.forward(state)
+    const r = sim.step(output)
+    done = r.done
+  }
+  console.log(sim.render())
+  const finalDist = sim.distanceTo()
+  log(`Steps: ${sim.stepCount} | Distance: ${finalDist.toFixed(2)} | Reached: ${finalDist <= 2 ? 'YES' : 'NO'} | Score: ${sim.totalReward.toFixed(1)}`, finalDist <= 2 ? 'green' : 'red')
+
+  return result
+}
+
+function listModulesAction(bridge) {
+  const modules = bridge.listModules()
+  if (modules.length === 0) {
+    log('No Python modules found in modules/', 'yellow')
+    log('Create .py files in modules/ that import NB', 'gray')
+    return
+  }
+  log(`Modules (${modules.length}):`, 'cyan')
+  modules.forEach((m, i) => {
+    const status = m.active ? `${COLORS.green}ACTIVE${COLORS.reset}` : `${COLORS.red}OFF${COLORS.reset}`
+    log(`  ${i + 1}. ${COLORS.magenta}${m.name}${COLORS.reset} ${status}`, 'gray')
+  })
+}
+
+function toggleModuleAction(bridge, name, state) {
+  const modules = bridge.listModules()
+  const found = modules.find(m => m.name === name)
+  if (!found) {
+    log(`Module not found: ${name}`, 'red')
+    return
+  }
+  bridge.setModuleActive(name, state)
+  log(`Module ${name} ${state ? 'enabled' : 'disabled'}`, state ? 'green' : 'yellow')
+}
+
+function retrainModuleAction(bridge, name) {
+  const modules = bridge.listModules()
+  const found = modules.find(m => m.name === name)
+  if (!found) {
+    log(`Module not found: ${name}`, 'red')
+    return
+  }
+  log(`Retraining module: ${name}...`, 'magenta')
+  log(`(In bot runtime, run: /modules train ${name})`, 'yellow')
+  log('For offline training, edit the retrain() function in the module file.', 'gray')
 }
 
 async function testModel(modelFile) {
@@ -266,8 +361,55 @@ async function handleCommand(line) {
       const opts = parseArgs(parts.slice(2).join(' '))
       if (subCmd === 'movement') {
         await trainMovement(opts)
+      } else if (subCmd === 'ultra') {
+        await trainUltra(opts)
       } else {
         log('Usage: train movement [--gens=N] [--pop=N] [--rate=N]', 'yellow')
+        log('       train ultra [--gens=N] [--pop=N] [--rate=N]', 'yellow')
+      }
+      break
+
+    case 'modules':
+      const bridge = new ModuleBridge(null)
+      const modSub = parts[1] ? parts[1].toLowerCase() : 'list'
+      if (modSub === 'list' || modSub === 'ls') {
+        listModulesAction(bridge)
+      } else if (modSub === 'toggle') {
+        const modName = parts[2]
+        if (!modName) {
+          log('Usage: modules toggle <module_name>', 'yellow')
+        } else {
+          const mods = bridge.listModules()
+          const found = mods.find(m => m.name === modName || m.name === modName.replace('.py', ''))
+          if (found) {
+            toggleModuleAction(bridge, found.name, !found.active)
+          } else {
+            log(`Module not found: ${modName}`, 'red')
+          }
+        }
+      } else if (modSub === 'retrain' || modSub === 'train') {
+        const modName = parts[2]
+        if (!modName) {
+          log('Usage: modules retrain <module_name>', 'yellow')
+        } else {
+          retrainModuleAction(bridge, modName)
+        }
+      } else if (modSub === 'on') {
+        const modName = parts[2]
+        if (!modName) { log('Usage: modules on <name>', 'yellow'); break }
+        const mods = bridge.listModules()
+        const found = mods.find(m => m.name === modName)
+        if (found) toggleModuleAction(bridge, found.name, true)
+        else log(`Module not found: ${modName}`, 'red')
+      } else if (modSub === 'off') {
+        const modName = parts[2]
+        if (!modName) { log('Usage: modules off <name>', 'yellow'); break }
+        const mods = bridge.listModules()
+        const found = mods.find(m => m.name === modName)
+        if (found) toggleModuleAction(bridge, found.name, false)
+        else log(`Module not found: ${modName}`, 'red')
+      } else {
+        log('Usage: modules [list|toggle|on|off|retrain] [name]', 'yellow')
       }
       break
 
