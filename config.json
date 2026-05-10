@@ -1,0 +1,8 @@
+{
+  "populationSize": 9,
+  "mutationRate": 0.1,
+  "generations": 10,
+  "serverHost": "localhost",
+  "serverPort": 25565,
+  "version": "1.20.4"
+}

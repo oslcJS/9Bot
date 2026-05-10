@@ -1,0 +1,11 @@
+{
+  "name": "9bot",
+  "version": "1.0.0",
+  "main": "train.js",
+  "dependencies": {
+    "blessed": "^0.1.81",
+    "minecraft-data": "^3.109.1",
+    "mineflayer": "^4.37.0",
+    "mineflayer-pathfinder": "^2.4.5"
+  }
+}
